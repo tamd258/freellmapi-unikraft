@@ -1,0 +1,28 @@
+name: diag-instance
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['diag.yml']
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    env:
+      UKC_TOKEN: ${{ secrets.UKC_TOKEN }}
+      UKC_METRO: sin
+    steps:
+      - name: list instances + fetch logs (clean secret token)
+        run: |
+          BASE=https://api.sin.unikraft.cloud
+          echo "== instances =="
+          curl -s -k -H "Authorization: Bearer $UKC_TOKEN" "$BASE/v1/instances" -o /tmp/inst.json -w "http:%{http_code}\n"
+          cat /tmp/inst.json
+          UUID=$(python3 -c "import json;d=json.load(open('/tmp/inst.json'));items=d if isinstance(d,list) else d.get('items',[]);print(items[0]['uuid'] if items else '')" 2>/dev/null)
+          echo "uuid=[$UUID]"
+          if [ -n "$UUID" ]; then
+            echo "== logs for $UUID =="
+            curl -s -k -H "Authorization: Bearer $UKC_TOKEN" "$BASE/v1/instances/$UUID/logs" -w "\nhttp:%{http_code}\n" | head -c 6000
+          fi
+          echo "== images =="
+          curl -s -k -H "Authorization: Bearer $UKC_TOKEN" "$BASE/v1/images" -w "\nhttp:%{http_code}\n" | head -c 1000
