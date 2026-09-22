@@ -15,32 +15,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 拉取上游 + 放入配置文件
+      - name: 拉取上游 + 放入配置
         run: |
           git clone --depth 1 https://github.com/tashfeenahmed/freellmapi.git src
+          echo "上游 HEAD: $(git -C src rev-parse HEAD)"
           cp Dockerfile src/Dockerfile
           cp Kraftfile src/Kraftfile
-          echo "--- Kraftfile ---"; cat Kraftfile
 
-      - name: 安装 CLI
+      - name: 安装 unikraft CLI
         run: |
           curl --proto '=https' --tlsv1.2 -fsSL https://unikraft.com/cli/install.sh | sh
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: ★ build 的完整帮助
-        run: unikraft build --help 2>&1 | sed -n '1,120p' || true
-
-      - name: ★ images 子命令
-        run: unikraft images --help 2>&1 | sed -n '1,60p' || true
-
-      - name: ★ 带 debug 日志构建（拿完整错误）
+      - name: unikraft build（只产出本地 OCI tar，不推送）
         working-directory: src
-        continue-on-error: true
         run: |
-          unikraft build . --output zhoufang/freellmapi:latest --log-level debug 2>&1 | tail -80
+          unikraft build . --output ./freellmapi.oci.tar
+          ls -la freellmapi.oci.tar
 
-      - name: ★ 不带 log-level 再试一次（对照）
-        working-directory: src
-        continue-on-error: true
-        run: |
-          unikraft build . --output zhoufang/freellmapi:latest 2>&1 | tail -40
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: freellmapi-oci
+          path: src/freellmapi.oci.tar
+          retention-days: 3
