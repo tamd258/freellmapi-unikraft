@@ -10,20 +10,19 @@ COPY shared/package.json ./shared/
 COPY server/package.json ./server/
 COPY client/package.json ./client/
 COPY cli/package.json ./cli/
-# sharp 是可选的图片缩放原生模块：应用用 try/catch 动态 import 优雅降级
-# （缺 sharp 时原图直传，不影响启动）。删掉它省下 libvips 预编译二进制(~80MiB)，
-# 让 unikraft 单 PUT 推 Harbor 不会超时。
-RUN node -e "const f='server/package.json';const p=require('./'+f);if(p.dependencies&&p.dependencies.sharp){delete p.dependencies.sharp;require('fs').writeFileSync(f,JSON.stringify(p,null,2))}"
+# sharp 必须保留：构建期 tsc 要它的类型声明，删了会 TS2307 编译失败。
+# 运行时用 try/catch 动态 import 优雅降级（缺 sharp 原图直传），所以在 build 阶段结束后再删。
 RUN npm install --no-audit --no-fund
 
 FROM deps AS build
 WORKDIR /app
 COPY . .
 RUN npm run build
-# 瘦身：client/cli 只是构建期产物（它们的依赖被 npm workspaces hoist 进 root
-# node_modules，会被整包打进 unikraft initrd 导致 600MiB+ 单 PUT 超时）。
-# 构建完把 client/cli 移出 workspaces 再 prune，它们的依赖全部变孤儿被清掉；
-# client/dist 已构建完成会保留（运行时静态托管）。
+# 构建完再把 sharp 原生模块从 node_modules 拿掉（省 ~50MiB libvips，运行时不需要）
+RUN rm -rf /app/node_modules/sharp /app/server/node_modules/sharp 2>/dev/null || true
+# 瘦身：client/cli 只是构建期产物（依赖被 npm workspaces hoist 进 root node_modules，
+# 会整包打进 unikraft initrd 导致 600MiB+ 单 PUT 超时）。构建完把 client/cli 移出 workspaces 再 prune，
+# 它们的依赖全部变孤儿被清掉；client/dist 已构建完成会保留（运行时静态托管）。
 RUN node -e "const f='package.json';const p=require('./'+f);p.workspaces=(p.workspaces||[]).filter(w=>!['client','cli'].includes(w));require('fs').writeFileSync(f,JSON.stringify(p,null,2))"
 RUN npm prune --omit=dev --workspaces=false || npm prune --omit=dev
 # 兜底：显式清掉 client 运行时大依赖（防止 prune 因 hoist 残留）
