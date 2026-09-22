@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1.7
-# Unikraft 友好版：Alpine(musl) 基础 + 独立 runtime 阶段（不用 Debian/glibc）
+# Unikraft 友好版：Alpine(musl) 构建 + FROM scratch 收尾
+# （照 Unikraft 官方 Node 指南的做法：只拷 node 二进制、依赖库、CA 证书、应用）
 ARG NODE_IMAGE=node:22-alpine
 
 FROM ${NODE_IMAGE} AS deps
 WORKDIR /app
-# better-sqlite3 是原生模块，musl 上没有预编译产物，需要现场编译
 RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json ./
 COPY shared/package.json ./shared/
@@ -18,20 +18,24 @@ WORKDIR /app
 COPY . .
 RUN npm run build && npm prune --omit=dev
 
-FROM ${NODE_IMAGE} AS runtime
+FROM ${NODE_IMAGE} AS nodedist
+
+FROM scratch
+COPY --from=nodedist /usr/local/bin/node /usr/local/bin/node
+COPY --from=nodedist /lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
+COPY --from=nodedist /usr/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
+COPY --from=nodedist /usr/lib/libstdc++.so.6 /usr/lib/libstdc++.so.6
+COPY --from=nodedist /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=nodedist /etc/passwd /etc/passwd
+COPY --from=nodedist /etc/group /etc/group
+COPY --from=nodedist /etc/nsswitch.conf /etc/nsswitch.conf
+COPY --from=nodedist /etc/hosts /etc/hosts
+COPY --from=nodedist /etc/resolv.conf /etc/resolv.conf
+COPY --from=build /app /app
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3001
 ENV HOST=0.0.0.0
 ENV FREELLMAPI_INSTALL_METHOD=unikraft
-COPY --from=build /app/package.json /app/package-lock.json ./
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/server/node_modules ./server/node_modules
-COPY --from=build /app/shared ./shared
-COPY --from=build /app/server/package.json ./server/package.json
-COPY --from=build /app/desktop/package.json ./desktop/package.json
-COPY --from=build /app/server/dist ./server/dist
-COPY --from=build /app/client/dist ./client/dist
-RUN mkdir -p /app/server/data && chmod 777 /app/server/data
 EXPOSE 3001
 CMD ["/usr/local/bin/node", "/app/server/dist/index.js"]
