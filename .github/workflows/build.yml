@@ -24,16 +24,27 @@ jobs:
       - name: 安装 unikraft CLI
         run: |
           curl --proto '=https' --tlsv1.2 -fsSL https://unikraft.com/cli/install.sh | sh
-          echo "$HOME/.unikraft/bin" >> $GITHUB_PATH
-          ls -la "$HOME/.unikraft/bin" || true
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: CLI 版本
-        run: unikraft version || unikraft --version || true
+      - name: CLI 版本 + 配置文件位置
+        run: |
+          unikraft version
+          unikraft profile list || true
 
       - name: unikraft build（打包 + 推送到平台镜像库）
         working-directory: src
         env:
+          # 关键：用 UKC_TOKEN/UKC_METRO 做非交互登录时必须开这个
+          UNIKRAFT_PROFILE_ENV: "true"
           UKC_TOKEN: ${{ secrets.UKC_TOKEN }}
           UKC_METRO: sin
         run: |
           unikraft build . --output /freellmapi:latest
+
+      - name: 列出平台上的镜像
+        if: always()
+        env:
+          UNIKRAFT_PROFILE_ENV: "true"
+          UKC_TOKEN: ${{ secrets.UKC_TOKEN }}
+          UKC_METRO: sin
+        run: unikraft images list || unikraft image list || true
