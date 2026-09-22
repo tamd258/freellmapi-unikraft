@@ -1,0 +1,7 @@
+spec: v0.7
+name: freellmapi
+runtime: base-compat:latest
+rootfs:
+  source: ./Dockerfile
+  format: erofs
+cmd: ["/usr/local/bin/node", "/app/server/dist/index.js"]
