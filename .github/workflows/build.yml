@@ -29,6 +29,15 @@ jobs:
       - name: unikraft login（非交互，写全 profile 含 Harbor 凭据）
         run: echo "$UKC_TOKEN" | unikraft login --token - --organization zhoufang
 
+      - name: 删除旧仓库释放 1GiB 配额（清掉之前手搓 push 的孤儿 blob）
+        run: |
+          # 控制面删除（能正确释放配额）
+          unikraft image rm unikraft.io/zhoufang/freellmapi:latest || true
+          # Harbor 仓库级删除兜底（清孤儿 blob，需项目权限；失败忽略）
+          CREDS=$(printf '%s' "$UKC_TOKEN" | base64 -d)
+          U=${CREDS%%:*}; P=${CREDS#*:}
+          curl -s -u "$U:$P" -X DELETE "https://unikraft.io/api/v2.0/projects/zhoufang/repositories/freellmapi" -w "harbor-repo-delete:%{http_code}\n" || true
+
       - name: unikraft build + 推送登记镜像
         working-directory: src
         run: unikraft build . --output zhoufang/freellmapi:latest
