@@ -10,12 +10,31 @@ COPY shared/package.json ./shared/
 COPY server/package.json ./server/
 COPY client/package.json ./client/
 COPY cli/package.json ./cli/
-RUN npm ci
+# sharp 是可选的图片缩放原生模块：应用用 try/catch 动态 import 优雅降级
+# （缺 sharp 时原图直传，不影响启动）。删掉它省下 libvips 预编译二进制(~80MiB)，
+# 让 unikraft 单 PUT 推 Harbor 不会超时。
+RUN node -e "const f='server/package.json';const p=require('./'+f);if(p.dependencies&&p.dependencies.sharp){delete p.dependencies.sharp;require('fs').writeFileSync(f,JSON.stringify(p,null,2))}"
+RUN npm install --no-audit --no-fund
 
 FROM deps AS build
 WORKDIR /app
 COPY . .
-RUN npm run build && npm prune --omit=dev
+RUN npm run build
+# 瘦身：client/cli 只是构建期产物（它们的依赖被 npm workspaces hoist 进 root
+# node_modules，会被整包打进 unikraft initrd 导致 600MiB+ 单 PUT 超时）。
+# 构建完把 client/cli 移出 workspaces 再 prune，它们的依赖全部变孤儿被清掉；
+# client/dist 已构建完成会保留（运行时静态托管）。
+RUN node -e "const f='package.json';const p=require('./'+f);p.workspaces=(p.workspaces||[]).filter(w=>!['client','cli'].includes(w));require('fs').writeFileSync(f,JSON.stringify(p,null,2))"
+RUN npm prune --omit=dev --workspaces=false || npm prune --omit=dev
+# 兜底：显式清掉 client 运行时大依赖（防止 prune 因 hoist 残留）
+RUN rm -rf /app/node_modules/react /app/node_modules/react-dom /app/node_modules/recharts \
+  /app/node_modules/@tanstack /app/node_modules/lucide-react /app/node_modules/react-markdown \
+  /app/node_modules/remark-gfm /app/node_modules/@dnd-kit /app/node_modules/@base-ui \
+  /app/node_modules/tailwindcss /app/node_modules/@tailwindcss /app/node_modules/highlight.js \
+  /app/node_modules/simple-icons /app/node_modules/shadcn /app/node_modules/clsx \
+  /app/node_modules/tailwind-merge /app/node_modules/class-variance-authority \
+  /app/node_modules/@fontsource-variable /app/node_modules/liquid-gooey /app/node_modules/react-router-dom \
+  /app/node_modules/tw-animate-css /app/node_modules/@freellmapi/client 2>/dev/null || true
 
 FROM ${NODE_IMAGE} AS runtime
 WORKDIR /app
