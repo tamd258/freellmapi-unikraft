@@ -48,7 +48,7 @@ jobs:
       - name: 创建可写卷（SQLite 需要写权限，erofs rootfs 只读）
         run: unikraft volume create --name freellmapi-data --size 1GiB --metro sin || true
 
-      - name: 创建并启动实例（挂卷 + 必要环境变量）
+      - name: 创建并启动实例（挂卷 + 必要环境变量），记录输出
         id: run
         run: |
           unikraft run --metro=sin --image=zhoufang/freellmapi:latest \
@@ -59,31 +59,40 @@ jobs:
             -e PORT=3001 -e HOST=0.0.0.0 -e NODE_ENV=production \
             -e FREEAPI_DB_PATH=/app/server/data/freellmapi.db \
             -e ENCRYPTION_KEY=$FREELLMAPI_ENC_KEY \
-            -e FREELLMAPI_INSTALL_METHOD=unikraft
+            -e FREELLMAPI_INSTALL_METHOD=unikraft 2>&1 | tee /tmp/run.out
 
-      - name: 诊断（用 CLI 取实例崩溃日志，确认真的跑起来）
+      - name: 诊断（抓取本次新实例的崩溃日志：sin metro + CLI 正确路径）
         run: |
           BASE=https://api.sin.unikraft.cloud
+          # 从 run 输出里取本次新建实例名（输出里有 'name:' 字段）
+          NAME=$(grep -m1 '^[[:space:]]*name:' /tmp/run.out 2>/dev/null | awk '{print $2}')
+          echo "NEW_INSTANCE=$NAME" >> "$GITHUB_ENV"
+          echo "本次新实例名: $NAME"
           sleep 40
-          echo "== instances =="
+          echo "== 所有实例状态 =="
           curl -s -k -H "Authorization: Bearer $UKC_TOKEN" "$BASE/v1/instances" -o /tmp/inst.json -w "http:%{http_code}\n"
           python3 - << 'PY'
           import json
           d=json.load(open('/tmp/inst.json'))
-          items=d.get('data',{}).get('instances', d.get('instances',[]))
-          open('/tmp/names.txt','w').write('\n'.join(it.get('name','') for it in items if it.get('name')))
+          items=d.get('data',{}).get('instances',[])
           for it in items:
               print('name', it.get('name'), '| state', it.get('state'),
                     '| exit_code', it.get('exit_code'), '| stop_reason', it.get('stop_reason'))
           PY
-          echo "== 用 CLI 抓取崩溃日志（正确的方式）=="
-          while IFS= read -r nm; do
-            [ -z "$nm" ] && continue
-            echo "===================== instance logs: $nm ====================="
-            unikraft instance logs "$nm" --tail 300 || echo "(logs fetch failed for $nm)"
-          done < /tmp/names.txt
+          if [ -n "$NAME" ]; then
+            echo "===================== crash logs (sin metro) for $NAME ====================="
+            unikraft instance logs "sin/$NAME" --tail 300 || echo "(logs fetch failed for $NAME)"
+          fi
           echo "== health probe =="
-          FQDN=$(python3 -c "import json;d=json.load(open('/tmp/inst.json'));items=d.get('data',{}).get('instances',[]);print(items[0].get('service_group',{}).get('domains',[{}])[0].get('fqdn','') if items else '')" 2>/dev/null)
+          FQDN=$(python3 -c "
+          import json
+          d=json.load(open('/tmp/inst.json'))
+          items=d.get('data',{}).get('instances',[])
+          for it in items:
+              if it.get('name')=='$NAME':
+                  print(it.get('service_group',{}).get('domains',[{}])[0].get('fqdn',''))
+          " 2>/dev/null)
+          echo "FQDN=$FQDN"
           if [ -n "$FQDN" ]; then
             curl -s -k -m 20 -w "\nHTTP:%{http_code}\n" "https://$FQDN/api/auth/status" || true
           fi
