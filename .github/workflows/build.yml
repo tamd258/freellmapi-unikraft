@@ -27,25 +27,10 @@ jobs:
           curl --proto '=https' --tlsv1.2 -fsSL https://unikraft.com/cli/install.sh | sh
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: ★ build 帮助
-        run: |
-          unikraft build --help 2>&1 | head -60 || true
-
-      - name: ★ 试输出格式 1：裸名字
+      - name: unikraft build（输出必须是 <org>/<app>:<tag>）
         working-directory: src
-        continue-on-error: true
-        run: unikraft build . --output freellmapi:latest 2>&1 | tail -25
-
-      - name: ★ 试输出格式 2：index.sin.unikraft.cloud/zhoufang/...
-        working-directory: src
-        continue-on-error: true
-        run: unikraft build . --output index.sin.unikraft.cloud/zhoufang/freellmapi:latest 2>&1 | tail -25
-
-      - name: ★ 试输出格式 3：不加 tag
-        working-directory: src
-        continue-on-error: true
-        run: unikraft build . --output freellmapi 2>&1 | tail -25
+        run: unikraft build . --output zhoufang/freellmapi:latest
 
       - name: 列出平台镜像
         if: always()
-        run: unikraft images list 2>&1 | tail -20 || true
+        run: unikraft images list || true
