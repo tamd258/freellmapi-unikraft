@@ -8,7 +8,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      UNIKRAFT_PROFILE_ENV: "true"
       UKC_TOKEN: ${{ secrets.UKC_TOKEN }}
       UKC_METRO: sin
     steps:
@@ -27,15 +26,17 @@ jobs:
           curl --proto '=https' --tlsv1.2 -fsSL https://unikraft.com/cli/install.sh | sh
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: unikraft build（只产出本地 OCI tar，不推送）
-        working-directory: src
-        run: |
-          unikraft build . --output ./freellmapi.oci.tar
-          ls -la freellmapi.oci.tar
+      - name: unikraft login（非交互，写全 profile 含 Harbor 凭据）
+        run: echo "$UKC_TOKEN" | unikraft login --token - --organization zhoufang
 
-      - name: 上传 artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: freellmapi-oci
-          path: src/freellmapi.oci.tar
-          retention-days: 3
+      - name: unikraft build + 推送登记镜像
+        working-directory: src
+        run: unikraft build . --output zhoufang/freellmapi:latest
+
+      - name: 创建并启动实例
+        run: |
+          unikraft run --metro=sin --image=zhoufang/freellmapi:latest \
+            -p 443:3001/http+tls \
+            -m 512MiB --vcpus 1 \
+            --scale-to-zero policy=off \
+            -e PORT=3001 -e HOST=0.0.0.0 -e NODE_ENV=production
