@@ -1,0 +1,117 @@
+name: freellmapi-redeploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [redeploy]
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    env:
+      UKC_TOKEN: ${{ secrets.UKC_TOKEN }}
+      UKC_METRO: sin
+      # 必须沿用当前实例的密钥，否则卷里已导入的 20 个 provider key 解不开
+      ENC_KEY: c6214833d959d5c676c179d3f061c90e4126c8bd73bf2cf3a5c8d27ef0a3e1ba
+    steps:
+      - name: 安装 unikraft CLI
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://unikraft.com/cli/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: unikraft login
+        run: echo "$UKC_TOKEN" | unikraft login --token - --organization zhoufang
+
+      - name: 列出实例并清理旧的 freellmapi 实例（释放数据卷与配额）
+        run: |
+          BASE=https://api.sin.unikraft.cloud
+          curl -s -k -H "Authorization: Bearer $UKC_TOKEN" "$BASE/v1/instances" -o /tmp/inst.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open('/tmp/inst.json'))
+          items = d.get('data', {}).get('instances', d.get('instances', []))
+          ours = [it for it in items if 'freellmapi' in json.dumps(it)]
+          for it in items:
+              doms = [x.get('fqdn') for x in ((it.get('service_group') or {}).get('domains') or [])]
+              print('INSTANCE name=%s state=%s domains=%s' % (it.get('name'), it.get('state'), doms))
+          names = [it.get('name') for it in ours if it.get('name')]
+          open('/tmp/ours.txt', 'w').write('\n'.join(names))
+          print('OURS=', names)
+          PY
+          while IFS= read -r nm; do
+            [ -z "$nm" ] && continue
+            echo "--- stop+delete sin/$nm"
+            unikraft instance stop "sin/$nm" --force || true
+            unikraft instance delete "sin/$nm" || true
+          done < /tmp/ours.txt
+          sleep 10
+
+      - name: 复用现有镜像 + 同一数据卷，注入调优 env 重新部署
+        run: |
+          unikraft run --metro=sin --image=zhoufang/freellmapi:latest \
+            -p 443:3001/http+tls \
+            -m 512MiB --vcpus 1 \
+            --scale-to-zero policy=off \
+            -v freellmapi-data:/app/server/data \
+            -e PORT=3001 -e HOST=0.0.0.0 -e NODE_ENV=production \
+            -e FREEAPI_DB_PATH=/app/server/data/freellmapi.db \
+            -e ENCRYPTION_KEY=$ENC_KEY \
+            -e FREELLMAPI_INSTALL_METHOD=unikraft \
+            -e PROVIDER_TIMEOUT_NVIDIA=25000 \
+            -e PROVIDER_TIMEOUT_GOOGLE=25000 \
+            -e PROVIDER_TIMEOUT_GROQ=25000 \
+            -e PROVIDER_TIMEOUT_CEREBRAS=25000 \
+            -e PROVIDER_TIMEOUT_MISTRAL=25000 \
+            -e PROVIDER_TIMEOUT_OPENROUTER=25000 \
+            -e PROVIDER_STREAM_STALL_TIMEOUT_MS=15000 \
+            -e FALLBACK_TIME_BUDGET_MS=15000 \
+            -e SLOW_ENDPOINT_BUFFER_MS=5000 \
+            -e MAX_CONSECUTIVE_UPSTREAM_FAILS=3 \
+            -e REQUEST_MAX_TOKENS_BUDGET=120000 \
+            -e FALLBACK_DETAIL_HEADER=1 \
+            -e FREELLMAPI_COMPRESSION=standard \
+            2>&1 | tee /tmp/run.out
+
+      - name: 验证（新实例可达 + env 生效）
+        run: |
+          BASE=https://api.sin.unikraft.cloud
+          sleep 50
+          curl -s -k -H "Authorization: Bearer $UKC_TOKEN" "$BASE/v1/instances" -o /tmp/i2.json
+          python3 - <<'PY' > /tmp/fqdn.txt
+          import json
+          d = json.load(open('/tmp/i2.json'))
+          items = d.get('data', {}).get('instances', d.get('instances', []))
+          ours = [it for it in items if 'freellmapi' in json.dumps(it)]
+          t = (ours or items)
+          doms = [x.get('fqdn') for x in ((t[0].get('service_group') or {}).get('domains') or [])]
+          print(doms[0] if doms else '')
+          PY
+          FQDN=$(cat /tmp/fqdn.txt)
+          echo "FQDN=$FQDN"
+          echo "== auth status =="
+          curl -s -k -m 25 -w "\nHTTP:%{http_code}\n" "https://$FQDN/api/auth/status" || true
+          echo "== 冒烟：统一 key + auto 路由 =="
+          python3 - "$FQDN" <<'PY'
+          import json, ssl, sys, urllib.request
+          ctx = ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE
+          base = "https://" + sys.argv[1]
+          def call(path, obj=None, tok=None):
+              h={"User-Agent":"curl"}; data=None
+              if obj is not None:
+                  data=json.dumps(obj).encode(); h["Content-Type"]="application/json"
+              if tok: h["Authorization"]="Bearer "+tok
+              r=urllib.request.Request(base+path, data=data, headers=h)
+              try:
+                  x=urllib.request.urlopen(r, context=ctx, timeout=90); return x.status, x.read()
+              except Exception as e:
+                  return getattr(e,'code',0), str(e).encode()
+          st,b=call("/api/auth/login", {"email":"tammader5@126.com","password":"fdsjklfdsjkl12AA"})
+          print("login:", st)
+          tok=json.loads(b)["token"] if st==200 else None
+          if tok:
+              st,b=call("/api/settings/api-key", tok=tok); print("api-key:", st)
+              ukey=json.loads(b)["apiKey"]
+              st,b=call("/v1/chat/completions", {"model":"auto","messages":[{"role":"user","content":"回复:OK"}],"max_tokens":16},
+                        tok=ukey)
+              print("chat:", st, b[:300].decode('utf-8','replace'))
+          PY
