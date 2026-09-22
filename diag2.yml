@@ -1,0 +1,37 @@
+name: diag-instance
+on:
+  workflow_dispatch:
+  push:
+    branches: [diag]
+    paths: ['diag2.yml']
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    env:
+      UKC_TOKEN: ${{ secrets.UKC_TOKEN }}
+      UKC_METRO: sin
+    steps:
+      - name: list instances + fetch logs (correct parsing)
+        run: |
+          BASE=https://api.sin.unikraft.cloud
+          curl -s -k -H "Authorization: Bearer $UKC_TOKEN" "$BASE/v1/instances" -o /tmp/inst.json -w "http:%{http_code}\n"
+          python3 - << 'PY'
+          import json
+          d=json.load(open('/tmp/inst.json'))
+          items=d.get('data',{}).get('instances', d.get('instances',[]))
+          print('instance count', len(items))
+          for it in items:
+              print('---')
+              print('name', it.get('name'), 'state', it.get('state'), 'exit_code', it.get('exit_code'), 'stop_reason', it.get('stop_reason'))
+              print('uuid', it.get('uuid'))
+              print('fqdn', it.get('service_group',{}).get('domains',[{}])[0].get('fqdn') if it.get('service_group') else '')
+              print('env', {k:v for k,v in (it.get('env') or {}).items()})
+              print('volumes', [v.get('name') for v in it.get('volumes',[])])
+          PY
+          UUID=$(python3 -c "import json;d=json.load(open('/tmp/inst.json'));items=d.get('data',{}).get('instances',[]);print(items[0]['uuid'] if items else '')")
+          echo "uuid=[$UUID]"
+          if [ -n "$UUID" ]; then
+            echo "===== LOGS for $UUID ====="
+            curl -s -k -H "Authorization: Bearer $UKC_TOKEN" "$BASE/v1/instances/$UUID/logs" -w "\nhttp:%{http_code}\n" | head -c 8000
+          fi
