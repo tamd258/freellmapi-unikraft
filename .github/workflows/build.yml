@@ -61,19 +61,17 @@ jobs:
       - name: 诊断（用干净 secret 拉实例状态 + 日志，确认真的跑起来）
         run: |
           BASE=https://api.sin.unikraft.cloud
-          sleep 15
+          sleep 20
           echo "== instances =="
           curl -s -k -H "Authorization: Bearer $UKC_TOKEN" "$BASE/v1/instances" -o /tmp/inst.json -w "http:%{http_code}\n"
-          cat /tmp/inst.json
-          UUID=$(python3 -c "import json;d=json.load(open('/tmp/inst.json'));items=d if isinstance(d,list) else d.get('items',[]);print(items[0]['uuid'] if items else '')" 2>/dev/null)
-          echo "uuid=[$UUID]"
+          UUID=$(python3 -c "import json;d=json.load(open('/tmp/inst.json'));items=d.get('data',{}).get('instances',[]);print(items[0]['uuid'] if items else '')" 2>/dev/null)
+          FQDN=$(python3 -c "import json;d=json.load(open('/tmp/inst.json'));items=d.get('data',{}).get('instances',[]);print(items[0].get('service_group',{}).get('domains',[{}])[0].get('fqdn','') if items else '')" 2>/dev/null)
+          echo "uuid=[$UUID] fqdn=[$FQDN]"
           if [ -n "$UUID" ]; then
-            echo "== logs =="
-            curl -s -k -H "Authorization: Bearer $UKC_TOKEN" "$BASE/v1/instances/$UUID/logs" -w "\nhttp:%{http_code}\n" | head -c 6000
+            echo "===== LOGS for $UUID ====="
+            curl -s -k -H "Authorization: Bearer $UKC_TOKEN" "$BASE/v1/instances/$UUID/logs" -w "\nhttp:%{http_code}\n" | head -c 8000
           fi
           echo "== health probe =="
-          FQDN=$(python3 -c "import json;d=json.load(open('/tmp/inst.json'));items=d if isinstance(d,list) else d.get('items',[]);print(items[0].get('fqdn','') if items else '')" 2>/dev/null)
-          echo "fqdn=$FQDN"
           if [ -n "$FQDN" ]; then
             curl -s -k -m 20 -w "\nHTTP:%{http_code}\n" "https://$FQDN/api/auth/status" || true
           fi
