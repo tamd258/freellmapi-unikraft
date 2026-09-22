@@ -43,7 +43,7 @@ jobs:
         run: unikraft build . --output zhoufang/freellmapi:latest --timeout 600s
 
       - name: 创建可写卷（SQLite 需要写权限，erofs rootfs 只读）
-        run: unikraft volume create freellmapi-data --size 1GiB --metro sin || true
+        run: unikraft volume create --name freellmapi-data --size 1GiB --metro sin || true
 
       - name: 创建并启动实例（挂卷 + 必要环境变量）
         id: run
