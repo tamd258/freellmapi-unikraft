@@ -25,7 +25,10 @@ RUN rm -rf /app/node_modules/sharp /app/server/node_modules/sharp 2>/dev/null ||
 # 瘦身：client/cli 只是构建期产物（依赖被 npm workspaces hoist 进 root node_modules，
 # 会整包打进 unikraft initrd 导致 600MiB+ 单 PUT 超时）。构建完把 client/cli 移出 workspaces 再 prune。
 RUN node -e "const f='package.json';const p=require('./'+f);p.workspaces=(p.workspaces||[]).filter(w=>!['client','cli'].includes(w));require('fs').writeFileSync(f,JSON.stringify(p,null,2))"
-RUN npm prune --omit=dev --workspaces=false || npm prune --omit=dev
+# 关键修正：必须让 npm 按 workspaces(server/shared)感知来 prune，
+# 否则 --workspaces=false 只按根 package.json 裁剪，会把 hoist 到根的
+# server 生产依赖(dotenv / better-sqlite3 / express 等)全当多余删掉 -> 启动 ERR_MODULE_NOT_FOUND。
+RUN npm prune --omit=dev
 # 兜底：显式清掉 client 运行时大依赖（防止 prune 因 hoist 残留）
 RUN rm -rf /app/node_modules/react /app/node_modules/react-dom /app/node_modules/recharts \
   /app/node_modules/@tanstack /app/node_modules/lucide-react /app/node_modules/react-markdown \
