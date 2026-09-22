@@ -49,6 +49,8 @@ COPY --from=build /app/server/package.json ./server/package.json
 COPY --from=build /app/desktop/package.json ./desktop/package.json
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/client/dist ./client/dist
+# 诊断：打印各层体积，确认 initrd 是否仍过大导致 unikraft 单 PUT 超时
+RUN echo "=== rootfs size ===" && du -sh / 2>/dev/null; du -sh /app 2>/dev/null; du -sh /usr/local 2>/dev/null; du -sh /usr/local/bin/node 2>/dev/null; du -sh /app/node_modules 2>/dev/null; du -sh /app/server/node_modules 2>/dev/null
 RUN mkdir -p /app/server/data && chmod 777 /app/server/data
 # 关键：清掉 node 基础镜像自带的 docker-entrypoint.sh，直接用绝对路径启动
 ENTRYPOINT []
