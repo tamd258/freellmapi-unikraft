@@ -1,0 +1,43 @@
+name: fetch-crash-logs
+on:
+  workflow_dispatch:
+  push:
+    branches: [diag-logs]
+
+jobs:
+  logs:
+    runs-on: ubuntu-latest
+    env:
+      UKC_TOKEN: ${{ secrets.UKC_TOKEN }}
+    steps:
+      - name: 安装 unikraft CLI
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://unikraft.com/cli/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: unikraft login
+        run: echo "$UKC_TOKEN" | unikraft login --token - --organization zhoufang
+
+      - name: 列出 sin 实例 + 抓取最新崩溃日志
+        run: |
+          BASE=https://api.sin.unikraft.cloud
+          echo "== 所有实例（含 metro/state/exit_code）=="
+          curl -s -k -H "Authorization: Bearer $UKC_TOKEN" "$BASE/v1/instances" -o /tmp/inst.json -w "http:%{http_code}\n"
+          python3 - << 'PY'
+          import json
+          d=json.load(open('/tmp/inst.json'))
+          items=d.get('data',{}).get('instances',[])
+          rows=[]
+          for it in items:
+              rows.append((it.get('name'), it.get('state'), it.get('exit_code'), it.get('stop_reason'), it.get('created_at','')))
+          # 按创建时间倒序，取最新
+          rows.sort(key=lambda r: r[4] or '', reverse=True)
+          for r in rows:
+              print('name', r[0], '| state', r[1], '| exit_code', r[2], '| stop', r[3], '| created', r[4])
+          if rows:
+              open('/tmp/latest.txt','w').write(rows[0][0])
+          PY
+          NAME=$(cat /tmp/latest.txt)
+          echo "最新实例: $NAME"
+          echo "===================== crash logs: sin/$NAME ====================="
+          unikraft instance logs "sin/$NAME" --tail 400 || echo "(logs fetch failed)"
