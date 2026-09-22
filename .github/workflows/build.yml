@@ -10,6 +10,9 @@ jobs:
     env:
       UKC_TOKEN: ${{ secrets.UKC_TOKEN }}
       UKC_METRO: sin
+      # 稳定且长度正确的加密密钥（64 hex = 32 字节），部署全程复用，
+      # 避免每次随机导致卷上已加密的 provider key 解不开而启动崩溃。
+      FREELLMAPI_ENC_KEY: c6214833d959d5c676c179d3f061c90e4126c8bd73bf2cf3a5c8d27ef0a3e1ba
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,23 +58,32 @@ jobs:
             -v freellmapi-data:/app/server/data \
             -e PORT=3001 -e HOST=0.0.0.0 -e NODE_ENV=production \
             -e FREEAPI_DB_PATH=/app/server/data/freellmapi.db \
-            -e ENCRYPTION_KEY=$(openssl rand -hex 16) \
+            -e ENCRYPTION_KEY=$FREELLMAPI_ENC_KEY \
             -e FREELLMAPI_INSTALL_METHOD=unikraft
 
-      - name: 诊断（用干净 secret 拉实例状态 + 日志，确认真的跑起来）
+      - name: 诊断（用 CLI 取实例崩溃日志，确认真的跑起来）
         run: |
           BASE=https://api.sin.unikraft.cloud
-          sleep 20
+          sleep 40
           echo "== instances =="
           curl -s -k -H "Authorization: Bearer $UKC_TOKEN" "$BASE/v1/instances" -o /tmp/inst.json -w "http:%{http_code}\n"
-          UUID=$(python3 -c "import json;d=json.load(open('/tmp/inst.json'));items=d.get('data',{}).get('instances',[]);print(items[0]['uuid'] if items else '')" 2>/dev/null)
-          FQDN=$(python3 -c "import json;d=json.load(open('/tmp/inst.json'));items=d.get('data',{}).get('instances',[]);print(items[0].get('service_group',{}).get('domains',[{}])[0].get('fqdn','') if items else '')" 2>/dev/null)
-          echo "uuid=[$UUID] fqdn=[$FQDN]"
-          if [ -n "$UUID" ]; then
-            echo "===== LOGS for $UUID ====="
-            curl -s -k -H "Authorization: Bearer $UKC_TOKEN" "$BASE/v1/instances/$UUID/logs" -w "\nhttp:%{http_code}\n" | head -c 8000
-          fi
+          python3 - << 'PY'
+          import json
+          d=json.load(open('/tmp/inst.json'))
+          items=d.get('data',{}).get('instances', d.get('instances',[]))
+          open('/tmp/names.txt','w').write('\n'.join(it.get('name','') for it in items if it.get('name')))
+          for it in items:
+              print('name', it.get('name'), '| state', it.get('state'),
+                    '| exit_code', it.get('exit_code'), '| stop_reason', it.get('stop_reason'))
+          PY
+          echo "== 用 CLI 抓取崩溃日志（正确的方式）=="
+          while IFS= read -r nm; do
+            [ -z "$nm" ] && continue
+            echo "===================== instance logs: $nm ====================="
+            unikraft instance logs "$nm" --tail 300 || echo "(logs fetch failed for $nm)"
+          done < /tmp/names.txt
           echo "== health probe =="
+          FQDN=$(python3 -c "import json;d=json.load(open('/tmp/inst.json'));items=d.get('data',{}).get('instances',[]);print(items[0].get('service_group',{}).get('domains',[{}])[0].get('fqdn','') if items else '')" 2>/dev/null)
           if [ -n "$FQDN" ]; then
             curl -s -k -m 20 -w "\nHTTP:%{http_code}\n" "https://$FQDN/api/auth/status" || true
           fi
