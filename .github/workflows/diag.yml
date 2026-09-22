@@ -1,0 +1,51 @@
+name: diag-auth
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    env:
+      UNIKRAFT_PROFILE_ENV: "true"
+      UKC_TOKEN: ${{ secrets.UKC_TOKEN }}
+      UKC_METRO: sin
+    steps:
+      - name: token 长度与解出的用户名（不打印密钥）
+        run: |
+          echo "UKC_TOKEN 长度: ${#UKC_TOKEN}"
+          echo -n "解出的用户名: "
+          printf '%s' "$UKC_TOKEN" | base64 -d 2>/dev/null | cut -d: -f1
+          echo -n "密钥长度: "
+          printf '%s' "$UKC_TOKEN" | base64 -d 2>/dev/null | cut -d: -f2 | wc -c
+
+      - name: 用该 token 向 Harbor 要 scope 令牌（只看状态码）
+        run: |
+          for SCOPE in "repository:zhoufang/freellmapi:pull" "repository:zhoufang/freellmapi:pull,push"; do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+              -u "$(printf '%s' "$UKC_TOKEN" | base64 -d)" \
+              "https://unikraft.io/service/token?service=harbor-registry&scope=$SCOPE")
+            echo "  scope=$SCOPE -> HTTP $CODE"
+          done
+
+      - name: 装 CLI 并试 push（trace 日志）
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://unikraft.com/cli/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: 最小镜像 push 测试（用 alpine 官方镜像，不再编译）
+        continue-on-error: true
+        run: |
+          mkdir -p t && cd t
+          cat > Kraftfile <<'EOF'
+          spec: v0.7
+          name: authtest
+          runtime: basealpine:latest
+          rootfs: ./Dockerfile
+          cmd: ["/bin/sh", "-c", "echo hi"]
+          EOF
+          cat > Dockerfile <<'EOF'
+          FROM scratch
+          COPY hello /hello
+          EOF
+          echo hi > hello
+          unikraft build . --output zhoufang/authtest:latest --log-level debug 2>&1 | tail -30 || true
