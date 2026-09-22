@@ -1,10 +1,12 @@
 # syntax=docker/dockerfile:1.7
-# Unikraft 用：Alpine(musl) 多阶段，去掉 Docker 专用 entrypoint
-ARG NODE_IMAGE=node:22-alpine
+# 关键修正：Unikraft base-compat 是 glibc 运行时，必须用 glibc 基础镜像构建原生模块
+# （better-sqlite3）。原先 node:22-alpine(musl) 编出的 .node 在 unikernel 里 dlopen 失败 -> exit 1。
+ARG NODE_IMAGE=node:22-bookworm-slim
 
 FROM ${NODE_IMAGE} AS deps
 WORKDIR /app
-RUN apk add --no-cache python3 make g++
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 COPY shared/package.json ./shared/
 COPY server/package.json ./server/
@@ -21,8 +23,7 @@ RUN npm run build
 # 构建完再把 sharp 原生模块从 node_modules 拿掉（省 ~50MiB libvips，运行时不需要）
 RUN rm -rf /app/node_modules/sharp /app/server/node_modules/sharp 2>/dev/null || true
 # 瘦身：client/cli 只是构建期产物（依赖被 npm workspaces hoist 进 root node_modules，
-# 会整包打进 unikraft initrd 导致 600MiB+ 单 PUT 超时）。构建完把 client/cli 移出 workspaces 再 prune，
-# 它们的依赖全部变孤儿被清掉；client/dist 已构建完成会保留（运行时静态托管）。
+# 会整包打进 unikraft initrd 导致 600MiB+ 单 PUT 超时）。构建完把 client/cli 移出 workspaces 再 prune。
 RUN node -e "const f='package.json';const p=require('./'+f);p.workspaces=(p.workspaces||[]).filter(w=>!['client','cli'].includes(w));require('fs').writeFileSync(f,JSON.stringify(p,null,2))"
 RUN npm prune --omit=dev --workspaces=false || npm prune --omit=dev
 # 兜底：显式清掉 client 运行时大依赖（防止 prune 因 hoist 残留）
@@ -51,7 +52,7 @@ COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/client/dist ./client/dist
 # 诊断：打印各层体积，确认 initrd 是否仍过大导致 unikraft 单 PUT 超时
 RUN echo "=== rootfs size ===" && du -sh / 2>/dev/null; du -sh /app 2>/dev/null; du -sh /usr/local 2>/dev/null; du -sh /usr/local/bin/node 2>/dev/null; du -sh /app/node_modules 2>/dev/null; du -sh /app/server/node_modules 2>/dev/null
-RUN mkdir -p /app/server/data && chmod 777 /app/server/data
+RUN mkdir -p /app/server/data
 # 关键：清掉 node 基础镜像自带的 docker-entrypoint.sh，直接用绝对路径启动
 ENTRYPOINT []
 EXPOSE 3001
