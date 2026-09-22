@@ -40,7 +40,9 @@ jobs:
 
       - name: unikraft build + 推送登记镜像
         working-directory: src
-        run: unikraft build . --output zhoufang/freellmapi:latest
+        env:
+          UNIKRAFT_TIMEOUT: 600s
+        run: unikraft build . --output zhoufang/freellmapi:latest --timeout 600s
 
       - name: 创建并启动实例
         run: |
