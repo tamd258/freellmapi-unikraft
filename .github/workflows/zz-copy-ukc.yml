@@ -1,0 +1,34 @@
+name: zz-copy-ukc
+on:
+  workflow_dispatch:
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pynacl --quiet
+      - env:
+          SRC: ${{ secrets.UKC_TOKEN }}
+          PAT: ${{ secrets.PAT_GH }}
+        run: |
+          python3 - <<'PY'
+          import os, json, base64, urllib.request
+          from nacl import encoding, public
+          pat = os.environ['PAT']; src = os.environ['SRC']
+          repo = 'tamd258/teldrive-unikraft'; nm = 'UKC_TOKEN'
+          def call(url, data=None, method=None):
+              req = urllib.request.Request(url, data=data, method=method,
+                  headers={'Authorization': 'Bearer ' + pat, 'User-Agent': 'c',
+                           'Accept': 'application/vnd.github+json',
+                           'Content-Type': 'application/json'})
+              return urllib.request.urlopen(req)
+          d = json.loads(call(f'https://api.github.com/repos/{repo}/actions/secrets/public-key').read())
+          pk = public.PublicKey(d['key'].encode(), encoding.Base64Encoder())
+          enc = base64.b64encode(public.SealedBox(pk).encrypt(src.encode())).decode()
+          body = json.dumps({'encrypted_value': enc, 'key_id': d['key_id']}).encode()
+          r = call(f'https://api.github.com/repos/{repo}/actions/secrets/{nm}', data=body, method='PUT')
+          print('COPIED status', r.status, 'len', len(src))
+          PY
